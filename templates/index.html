@@ -211,6 +211,16 @@
     <button id="copy-btn" title="Copy transcript" aria-label="Copy transcript">Copy</button>
   </div>
 
+  <!-- Dictation language -->
+  <div style="margin-bottom:.75rem;">
+    <p class="section-title">Dictation language</p>
+    <select id="dictation-lang" aria-label="Dictation language" style="background:#334155;color:#e2e8f0;border:1px solid #475569;border-radius:.5rem;padding:.45rem .75rem;font-size:.9rem;cursor:pointer;min-width:180px;">
+      {% for code, label in dictation_languages.items() %}
+      <option value="{{ code }}"{% if code == 'auto' %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
   <!-- Recording controls -->
   <div class="controls">
     <button id="record-btn">
@@ -227,7 +237,7 @@
     <div class="translate-row">
       <select id="lang-select" aria-label="Target language">
         {% for code, label in translation_targets.items() %}
-        <option value="{{ code }}"{% if code == 'en' %} selected{% endif %}>{{ label }}</option>
+        <option value="{{ code }}"{% if code == 'zh-CN' %} selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
       <button id="translate-btn" disabled>Translate</button>
@@ -258,6 +268,7 @@ const langSelect    = document.getElementById('lang-select');
 const translateBtn  = document.getElementById('translate-btn');
 const translatedBox = document.getElementById('translated-box');
 const spinnerTr     = document.getElementById('spinner-tr');
+const dictationLang = document.getElementById('dictation-lang');
 
 // ─── Recording ───────────────────────────────────────────────────────────────
 recordBtn.addEventListener('click', async () => {
@@ -312,6 +323,7 @@ async function sendAudio() {
   const blob = new Blob(audioChunks, { type: mimeType });
   const formData = new FormData();
   formData.append('audio', blob, 'recording' + ext);
+  formData.append('language', dictationLang.value);
 
   recordBtn.disabled = true;
   spinnerStt.classList.remove('hidden');
@@ -328,6 +340,9 @@ async function sendAudio() {
       langBadge.textContent = data.language || '—';
       elapsedBadge.textContent = data.elapsed != null ? data.elapsed + ' s' : '—';
       translateBtn.disabled = !data.text;
+      if (data.text) {
+        await doTranslate();
+      }
     }
   } catch (err) {
     setStatus('Request failed: ' + err.message, true);
@@ -349,7 +364,9 @@ copyBtn.addEventListener('click', () => {
 });
 
 // ─── Translation ─────────────────────────────────────────────────────────────
-translateBtn.addEventListener('click', async () => {
+translateBtn.addEventListener('click', () => doTranslate());
+
+async function doTranslate() {
   const text = transcriptBox.dataset.text || '';
   if (!text) return;
 
@@ -376,7 +393,7 @@ translateBtn.addEventListener('click', async () => {
     translateBtn.disabled = false;
     spinnerTr.classList.add('hidden');
   }
-});
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function setTranscript(text) {

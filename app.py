@@ -55,6 +55,29 @@ TRANSLATION_TARGETS = {
     "id": "Indonesian",
 }
 
+DICTATION_LANGUAGES = {
+    "auto": "Auto-detect",
+    "en": "English",
+    "zh": "Chinese",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "pt": "Portuguese",
+    "ru": "Russian",
+    "ar": "Arabic",
+    "hi": "Hindi",
+    "it": "Italian",
+    "nl": "Dutch",
+    "pl": "Polish",
+    "sv": "Swedish",
+    "tr": "Turkish",
+    "vi": "Vietnamese",
+    "th": "Thai",
+    "id": "Indonesian",
+}
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -62,7 +85,7 @@ TRANSLATION_TARGETS = {
 
 @app.route("/")
 def index():
-    return render_template("index.html", translation_targets=TRANSLATION_TARGETS)
+    return render_template("index.html", translation_targets=TRANSLATION_TARGETS, dictation_languages=DICTATION_LANGUAGES)
 
 
 @app.route("/transcribe", methods=["POST"])
@@ -81,9 +104,14 @@ def transcribe():
         tmp_path = tmp.name
         audio_file.save(tmp_path)
 
+    language = request.form.get("language", "auto")
+
     try:
         start = time.perf_counter()
-        result = model.transcribe(tmp_path, task="transcribe")
+        transcribe_kwargs = {"task": "transcribe"}
+        if language and language != "auto":
+            transcribe_kwargs["language"] = language
+        result = model.transcribe(tmp_path, **transcribe_kwargs)
         elapsed = time.perf_counter() - start
 
         detected_language = result.get("language", "unknown")
