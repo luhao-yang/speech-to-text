@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Speech to Text</title>
+  <style>
+    /* ─── Reset & base ─────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1rem;
+    }
+
+    /* ─── Card ─────────────────────────────────────────────────────────── */
+    .card {
+      background: #1e293b;
+      border-radius: 1rem;
+      padding: 2rem;
+      width: 100%;
+      max-width: 720px;
+      box-shadow: 0 4px 24px rgba(0,0,0,.4);
+    }
+
+    h1 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      margin-bottom: 1.5rem;
+      color: #f8fafc;
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+    }
+
+    /* ─── Status bar ────────────────────────────────────────────────────── */
+    .meta-row {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+      font-size: .85rem;
+      color: #94a3b8;
+    }
+    .meta-row span { display: flex; align-items: center; gap: .25rem; }
+    .badge {
+      background: #334155;
+      border-radius: .375rem;
+      padding: .15rem .5rem;
+      font-weight: 600;
+      color: #7dd3fc;
+    }
+
+    /* ─── Transcript box ────────────────────────────────────────────────── */
+    #transcript-box {
+      position: relative;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: .75rem;
+      padding: 1rem 1rem 2.5rem;
+      min-height: 140px;
+      font-size: 1rem;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: #f1f5f9;
+      margin-bottom: 1.25rem;
+    }
+    #transcript-box.placeholder { color: #475569; font-style: italic; }
+
+    #copy-btn {
+      position: absolute;
+      bottom: .6rem;
+      right: .6rem;
+      background: #334155;
+      border: none;
+      border-radius: .5rem;
+      padding: .3rem .75rem;
+      color: #94a3b8;
+      font-size: .8rem;
+      cursor: pointer;
+      transition: background .2s, color .2s;
+    }
+    #copy-btn:hover { background: #475569; color: #e2e8f0; }
+    #copy-btn.copied { background: #166534; color: #bbf7d0; }
+
+    /* ─── Controls row ──────────────────────────────────────────────────── */
+    .controls { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin-bottom: 1.5rem; }
+
+    #record-btn {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      padding: .65rem 1.4rem;
+      border: none;
+      border-radius: 2rem;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .2s, transform .1s;
+      background: #3b82f6;
+      color: #fff;
+    }
+    #record-btn:hover { background: #2563eb; }
+    #record-btn.recording { background: #ef4444; animation: pulse 1.2s ease-in-out infinite; }
+    #record-btn:disabled { background: #475569; cursor: not-allowed; }
+
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,.5); }
+      50%       { box-shadow: 0 0 0 8px rgba(239,68,68,0); }
+    }
+
+    #dot { width: 10px; height: 10px; border-radius: 50%; background: currentColor; }
+
+    /* ─── Translation section ───────────────────────────────────────────── */
+    .section-title {
+      font-size: .8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: #64748b;
+      margin-bottom: .5rem;
+    }
+
+    .translate-row {
+      display: flex;
+      gap: .75rem;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+
+    select#lang-select {
+      background: #334155;
+      color: #e2e8f0;
+      border: 1px solid #475569;
+      border-radius: .5rem;
+      padding: .45rem .75rem;
+      font-size: .9rem;
+      cursor: pointer;
+      flex: 1;
+      min-width: 180px;
+    }
+    select#lang-select:focus { outline: 2px solid #3b82f6; outline-offset: 1px; }
+
+    #translate-btn {
+      background: #0ea5e9;
+      color: #fff;
+      border: none;
+      border-radius: .5rem;
+      padding: .45rem 1.1rem;
+      font-size: .9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .2s;
+      white-space: nowrap;
+    }
+    #translate-btn:hover { background: #0284c7; }
+    #translate-btn:disabled { background: #475569; cursor: not-allowed; }
+
+    #translated-box {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: .75rem;
+      padding: .85rem 1rem;
+      min-height: 80px;
+      font-size: 1rem;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: #f1f5f9;
+    }
+    #translated-box.placeholder { color: #475569; font-style: italic; }
+
+    /* ─── Spinner ───────────────────────────────────────────────────────── */
+    .spinner {
+      display: inline-block;
+      width: 18px; height: 18px;
+      border: 2px solid rgba(255,255,255,.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin .6s linear infinite;
+      vertical-align: middle;
+      margin-right: .35rem;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h1>🎙️ Speech to Text</h1>
+
+  <!-- Meta info row -->
+  <div class="meta-row">
+    <span>Language detected: <span class="badge" id="lang-badge">—</span></span>
+    <span>Elapsed: <span class="badge" id="elapsed-badge">—</span></span>
+  </div>
+
+  <!-- Transcript output -->
+  <div id="transcript-box" class="placeholder" role="status" aria-live="polite">
+    Press "Start Recording" and speak…
+    <button id="copy-btn" title="Copy transcript" aria-label="Copy transcript">Copy</button>
+  </div>
+
+  <!-- Recording controls -->
+  <div class="controls">
+    <button id="record-btn">
+      <span id="dot"></span>
+      <span id="btn-label">Start Recording</span>
+    </button>
+    <span id="spinner-stt" class="hidden"><span class="spinner"></span>Transcribing…</span>
+    <span id="status-msg" style="font-size:.85rem;color:#94a3b8;"></span>
+  </div>
+
+  <!-- Translation section -->
+  <div>
+    <p class="section-title">Translate to</p>
+    <div class="translate-row">
+      <select id="lang-select" aria-label="Target language">
+        {% for code, label in translation_targets.items() %}
+        <option value="{{ code }}"{% if code == 'en' %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <button id="translate-btn" disabled>Translate</button>
+      <span id="spinner-tr" class="hidden"><span class="spinner"></span>Translating…</span>
+    </div>
+    <div id="translated-box" class="placeholder" role="status" aria-live="polite">
+      Translation will appear here…
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── State ──────────────────────────────────────────────────────────────────
+let mediaRecorder = null;
+let audioChunks   = [];
+let isRecording   = false;
+
+// ─── DOM refs ────────────────────────────────────────────────────────────────
+const recordBtn     = document.getElementById('record-btn');
+const btnLabel      = document.getElementById('btn-label');
+const transcriptBox = document.getElementById('transcript-box');
+const copyBtn       = document.getElementById('copy-btn');
+const langBadge     = document.getElementById('lang-badge');
+const elapsedBadge  = document.getElementById('elapsed-badge');
+const statusMsg     = document.getElementById('status-msg');
+const spinnerStt    = document.getElementById('spinner-stt');
+const langSelect    = document.getElementById('lang-select');
+const translateBtn  = document.getElementById('translate-btn');
+const translatedBox = document.getElementById('translated-box');
+const spinnerTr     = document.getElementById('spinner-tr');
+
+// ─── Recording ───────────────────────────────────────────────────────────────
+recordBtn.addEventListener('click', async () => {
+  if (!isRecording) {
+    await startRecording();
+  } else {
+    stopRecording();
+  }
+});
+
+async function startRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = getSupportedMimeType();
+    mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+    audioChunks = [];
+
+    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+    mediaRecorder.onstop = () => { stream.getTracks().forEach(t => t.stop()); sendAudio(); };
+
+    mediaRecorder.start();
+    isRecording = true;
+
+    recordBtn.classList.add('recording');
+    btnLabel.textContent = 'Stop Recording';
+    setStatus('');
+  } catch (err) {
+    setStatus('Microphone access denied: ' + err.message, true);
+  }
+}
+
+function stopRecording() {
+  if (mediaRecorder && isRecording) {
+    mediaRecorder.stop();
+    isRecording = false;
+    recordBtn.classList.remove('recording');
+    btnLabel.textContent = 'Start Recording';
+  }
+}
+
+function getSupportedMimeType() {
+  const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg'];
+  return types.find(t => MediaRecorder.isTypeSupported(t)) || '';
+}
+
+// ─── Transcription ───────────────────────────────────────────────────────────
+async function sendAudio() {
+  if (!audioChunks.length) return;
+
+  const mimeType = mediaRecorder.mimeType || 'audio/webm';
+  const ext = mimeType.includes('ogg') ? '.ogg' : '.webm';
+  const blob = new Blob(audioChunks, { type: mimeType });
+  const formData = new FormData();
+  formData.append('audio', blob, 'recording' + ext);
+
+  recordBtn.disabled = true;
+  spinnerStt.classList.remove('hidden');
+  setStatus('');
+
+  try {
+    const res = await fetch('/transcribe', { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if (data.error) {
+      setStatus('Error: ' + data.error, true);
+    } else {
+      setTranscript(data.text || '(no speech detected)');
+      langBadge.textContent = data.language || '—';
+      elapsedBadge.textContent = data.elapsed != null ? data.elapsed + ' s' : '—';
+      translateBtn.disabled = !data.text;
+    }
+  } catch (err) {
+    setStatus('Request failed: ' + err.message, true);
+  } finally {
+    recordBtn.disabled = false;
+    spinnerStt.classList.add('hidden');
+  }
+}
+
+// ─── Copy ────────────────────────────────────────────────────────────────────
+copyBtn.addEventListener('click', () => {
+  const text = transcriptBox.dataset.text || '';
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    copyBtn.textContent = 'Copied!';
+    copyBtn.classList.add('copied');
+    setTimeout(() => { copyBtn.textContent = 'Copy'; copyBtn.classList.remove('copied'); }, 2000);
+  });
+});
+
+// ─── Translation ─────────────────────────────────────────────────────────────
+translateBtn.addEventListener('click', async () => {
+  const text = transcriptBox.dataset.text || '';
+  if (!text) return;
+
+  const target = langSelect.value;
+  translateBtn.disabled = true;
+  spinnerTr.classList.remove('hidden');
+
+  try {
+    const res = await fetch('/translate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, target }),
+    });
+    const data = await res.json();
+
+    if (data.error) {
+      setTranslated('Translation error: ' + data.error, true);
+    } else {
+      setTranslated(data.translated || '');
+    }
+  } catch (err) {
+    setTranslated('Request failed: ' + err.message, true);
+  } finally {
+    translateBtn.disabled = false;
+    spinnerTr.classList.add('hidden');
+  }
+});
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function setTranscript(text) {
+  transcriptBox.textContent = text;
+  transcriptBox.dataset.text = text;
+  transcriptBox.classList.remove('placeholder');
+  transcriptBox.appendChild(copyBtn);  // keep copy btn inside
+}
+
+function setTranslated(text, isError = false) {
+  translatedBox.textContent = text;
+  translatedBox.classList.toggle('placeholder', isError);
+}
+
+function setStatus(msg, isError = false) {
+  statusMsg.textContent = msg;
+  statusMsg.style.color = isError ? '#f87171' : '#94a3b8';
+}
+</script>
+</body>
+</html>
