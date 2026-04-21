@@ -340,9 +340,6 @@ async function sendAudio() {
       langBadge.textContent = data.language || '—';
       elapsedBadge.textContent = data.elapsed != null ? data.elapsed + ' s' : '—';
       translateBtn.disabled = !data.text;
-      if (data.text) {
-        await doTranslate();
-      }
     }
   } catch (err) {
     setStatus('Request failed: ' + err.message, true);
