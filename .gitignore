@@ -42,6 +42,7 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+.claude/
 
 # Uploads / temp files
 uploads/
