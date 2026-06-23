@@ -11,7 +11,7 @@ from flask import Flask, jsonify, render_template, request
 from flask_sock import Sock
 from deep_translator import GoogleTranslator
 
-from streaming import SAMPLE_RATE, OnlineTranscriber, join_words, pcm16_to_float32
+from streaming import SAMPLE_RATE, OnlineTranscriber, pcm16_to_float32
 
 # INFO-level logs (including the dev server's per-request access logs) are on by
 # default. Set STT_VERBOSE=0 to quiet them down to WARNING.
@@ -233,7 +233,7 @@ def stream(ws):
         if committed_words:
             ws.send(json.dumps({
                 "type": "final",
-                "text": join_words(committed_words),
+                "text": "".join(w[2] for w in committed_words).strip(),
                 "committed": transcriber.committed_text,
             }))
         ws.send(json.dumps({"type": "partial", "text": partial}))
@@ -271,7 +271,7 @@ def stream(ws):
         remaining = transcriber.finish()
         ws.send(json.dumps({
             "type": "final",
-            "text": join_words(remaining),
+            "text": "".join(w[2] for w in remaining).strip(),
             "committed": transcriber.committed_text,
             "done": True,
         }))

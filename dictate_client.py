@@ -22,7 +22,6 @@ Then hold F9, speak, and release.
 import json
 import queue
 import threading
-import time
 
 import numpy as np
 import sounddevice as sd
@@ -36,8 +35,6 @@ BLOCKSIZE = 1_600             # 0.1 s of audio per mic callback
 LANGUAGE = "en"              # ISO code (e.g. "en"); "auto" detects but misfires on short clips
 HOTKEY = keyboard.Key.f9      # hold to dictate
 TRAILING_SPACE = True         # append a space after each dictation
-TAIL_MS = 300                 # keep capturing this long after release so the
-                              # last word isn't clipped (raise if it still is)
 
 # Audio gain. The browser's getUserMedia auto-applies noise suppression and
 # auto-gain; raw sounddevice capture does not, which hurts accuracy on quiet
@@ -154,13 +151,6 @@ class Dictation:
         with self._lock:
             if not self._active:
                 return
-
-        # Keep capturing briefly after the key is released: the tail of the last
-        # word is still in the OS capture buffer, and Whisper needs a little
-        # trailing audio to finalize it. Without this the last word gets clipped.
-        time.sleep(TAIL_MS / 1000.0)
-
-        with self._lock:
             self._active = False
 
         # Stop the mic, then flush any audio still queued before signalling stop.
