@@ -20,6 +20,25 @@ logger = logging.getLogger(__name__)
 SAMPLE_RATE = 16000
 
 
+def join_words(words):
+    """Join (start, end, token) word tuples into text with sane spacing.
+
+    faster-whisper usually prefixes each word token with a space, but not
+    always (notably at segment boundaries), which leaves words glued together.
+    We add a separating space only when the token is missing one *and* it starts
+    with an ASCII alphanumeric — so existing spacing is preserved, punctuation
+    stays attached, and space-less scripts (e.g. CJK) aren't mangled.
+    """
+    out = []
+    for _, _, tok in words:
+        if not tok:
+            continue
+        if out and not tok[0].isspace() and tok[0].isascii() and tok[0].isalnum():
+            out.append(" ")
+        out.append(tok)
+    return "".join(out).strip()
+
+
 class HypothesisBuffer:
     """Holds committed words and applies LocalAgreement-2 to new hypotheses."""
 
@@ -98,7 +117,7 @@ class OnlineTranscriber:
 
     @property
     def committed_text(self):
-        return "".join(w[2] for w in self.committed).strip()
+        return join_words(self.committed)
 
     def _transcribe(self, init_prompt):
         with self.model_lock:
@@ -130,7 +149,7 @@ class OnlineTranscriber:
 
         self._maybe_trim()
 
-        partial = "".join(w[2] for w in self.hypothesis.buffer).strip()
+        partial = join_words(self.hypothesis.buffer)
         return newly_committed, partial
 
     def _maybe_trim(self):
