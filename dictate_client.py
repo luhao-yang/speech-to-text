@@ -23,6 +23,7 @@ import json
 import queue
 import threading
 
+import numpy as np
 import sounddevice as sd
 import websocket  # websocket-client
 from pynput import keyboard
@@ -31,9 +32,19 @@ from pynput import keyboard
 SERVER_URL = "ws://localhost:5000/ws/stream"
 SAMPLE_RATE = 16_000          # server expects 16 kHz mono int16
 BLOCKSIZE = 1_600             # 0.1 s of audio per mic callback
-LANGUAGE = "auto"            # ISO code (e.g. "en") or "auto" to detect
+LANGUAGE = "en"              # ISO code (e.g. "en"); "auto" detects but misfires on short clips
 HOTKEY = keyboard.Key.f9      # hold to dictate
 TRAILING_SPACE = True         # append a space after each dictation
+
+# Audio gain. The browser's getUserMedia auto-applies noise suppression and
+# auto-gain; raw sounddevice capture does not, which hurts accuracy on quiet
+# mics. AUTO_GAIN adaptively normalizes speech toward a healthy level; MIC_GAIN
+# is an extra manual multiplier on top (raise it if dictation is still quiet).
+AUTO_GAIN = True
+MIC_GAIN = 1.0
+_AGC_TARGET_PEAK = 0.6        # aim speech peaks at 60% of full scale
+_AGC_MAX_GAIN = 8.0           # never amplify silence/noise beyond this
+_AGC_NOISE_FLOOR = 0.01       # RMS below this is treated as silence (no pumping)
 # ---------------------------------------------------------------------------
 
 _kb = keyboard.Controller()
@@ -51,13 +62,32 @@ class Dictation:
         self._committed = ""
         self._send_thread = None
         self._recv_thread = None
+        self._gain = 1.0  # current adaptive gain, smoothed across chunks
 
     # -- mic capture --------------------------------------------------------
+    def _apply_gain(self, pcm: bytes) -> bytes:
+        """Adaptively normalize a chunk's level (cheap software AGC)."""
+        if not AUTO_GAIN and MIC_GAIN == 1.0:
+            return pcm
+        samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+        if AUTO_GAIN and samples.size:
+            peak = float(np.max(np.abs(samples)))
+            rms = float(np.sqrt(np.mean(samples ** 2)))
+            if rms > _AGC_NOISE_FLOOR and peak > 0.0:
+                desired = min(_AGC_TARGET_PEAK / peak, _AGC_MAX_GAIN)
+                # Turn the gain down fast (avoid clipping), back up slowly.
+                coeff = 0.5 if desired < self._gain else 0.1
+                self._gain += coeff * (desired - self._gain)
+            samples *= self._gain
+        samples *= MIC_GAIN
+        np.clip(samples, -1.0, 1.0, out=samples)
+        return (samples * 32767.0).astype(np.int16).tobytes()
+
     def _mic_cb(self, indata, frames, time_info, status):  # noqa: ARG002
         if status:
             print("audio:", status)
         # RawInputStream hands us a bytes-like buffer of raw int16 PCM.
-        self._audio_q.put(bytes(indata))
+        self._audio_q.put(self._apply_gain(bytes(indata)))
 
     def _send_loop(self):
         while self._active:
@@ -96,6 +126,7 @@ class Dictation:
             self._active = True
             self._committed = ""
             self._audio_q = queue.Queue()
+            self._gain = 1.0
         try:
             self._ws = websocket.create_connection(SERVER_URL, max_size=None)
             self._ws.send(json.dumps({"language": LANGUAGE}))

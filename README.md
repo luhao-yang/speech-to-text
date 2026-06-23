@@ -301,9 +301,16 @@ Configurable constants at the top of `dictate_client.py`:
 | Constant | Default | Purpose |
 |----------|---------|---------|
 | `HOTKEY` | `F9` | Push-to-talk key (held while speaking). |
-| `LANGUAGE` | `"auto"` | ISO code (e.g. `"en"`) or `"auto"` to detect. |
+| `LANGUAGE` | `"en"` | ISO code (e.g. `"en"`) or `"auto"` to detect. Auto-detect misfires on short clips, so pin it if you can. |
 | `TRAILING_SPACE` | `True` | Append a space after each dictation. |
+| `AUTO_GAIN` | `True` | Adaptively normalize mic level toward a healthy volume (the browser does this for free; raw capture doesn't). |
+| `MIC_GAIN` | `1.0` | Extra manual gain multiplier on top of `AUTO_GAIN`. Raise it (e.g. `2.0`) if dictation is still too quiet/inaccurate. |
 | `SERVER_URL` | `ws://localhost:5000/ws/stream` | Where the server is. |
+
+> **Accuracy note:** the browser applies noise suppression and auto-gain to the
+> mic by default, which the raw native capture can't fully match. `AUTO_GAIN`
+> closes most of the gap; if accuracy is still poor, try raising `MIC_GAIN` or
+> moving closer to the mic.
 
 > Text is injected after you release the key (the server runs a final pass), so
 > it feels like "speak → release → text lands" rather than word-by-word.
