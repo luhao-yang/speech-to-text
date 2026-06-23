@@ -1,0 +1,7 @@
+# Dependencies for the native push-to-talk dictation client (dictate_client.py).
+# Install these with your *Windows* Python (not the WSL .venv), since the client
+# needs the OS that owns your keyboard and microphone:
+#   pip install -r requirements-client.txt
+sounddevice
+websocket-client
+pynput

@@ -105,7 +105,12 @@ speech-to-text/
 │       ├── Meta badges          (detected language, elapsed time)
 │       └── Translation section  (language dropdown + output area)
 │
-├── requirements.txt        # Python dependencies (pip)
+├── dictate_client.py       # Native push-to-talk dictation client (runs Windows-side)
+├── dictate.bat             # Launcher for the client (Windows / cmd)
+├── dictate.sh              # Launcher for the client (Git Bash)
+│
+├── requirements.txt        # Server dependencies (pip)
+├── requirements-client.txt # Native dictation client dependencies (Windows Python)
 └── README.md               # This file
 ```
 
@@ -265,6 +270,45 @@ To stop the server: press `Ctrl+C`
    - The **transcript** appears in the text area.
    - The **detected language** badge updates (e.g. `en`, `zh`, `fr`).
    - The **elapsed time** badge shows how many seconds the transcription took.
+
+### Native push-to-talk dictation (no browser)
+
+`dictate_client.py` turns the app into a system-wide dictation tool: hold a
+hotkey, speak, release, and the transcript is **typed at your cursor** in
+whatever application is focused — no browser, no copy/paste.
+
+It's a thin client over the same `/ws/stream` WebSocket the web UI uses, so the
+server (`python app.py`) runs unchanged.
+
+> **WSL users:** run the client with **Windows** Python (e.g. from Git Bash or
+> `cmd`), *not* inside WSL. Global hotkeys and "type at the cursor" only work
+> from the OS that owns your keyboard and windows. The server can stay in WSL —
+> the client reaches it over `localhost`, just like the browser.
+
+1. Install the client dependencies with your Windows Python:
+   ```bash
+   pip install -r requirements-client.txt
+   ```
+2. Make sure the server is running (`python app.py`, in WSL is fine).
+3. Launch the client:
+   - **Git Bash:** `./dictate.sh`
+   - **Windows:** double-click `dictate.bat` (or run it from `cmd`)
+4. **Hold F9**, speak, then **release** — the text appears at your cursor.
+   Press **Ctrl+C** in the client window to quit.
+
+Configurable constants at the top of `dictate_client.py`:
+
+| Constant | Default | Purpose |
+|----------|---------|---------|
+| `HOTKEY` | `F9` | Push-to-talk key (held while speaking). |
+| `LANGUAGE` | `"auto"` | ISO code (e.g. `"en"`) or `"auto"` to detect. |
+| `TRAILING_SPACE` | `True` | Append a space after each dictation. |
+| `SERVER_URL` | `ws://localhost:5000/ws/stream` | Where the server is. |
+
+> Text is injected after you release the key (the server runs a final pass), so
+> it feels like "speak → release → text lands" rather than word-by-word.
+> Keystroke simulation occasionally needs the terminal run as administrator to
+> type into elevated apps.
 
 ### Copy to clipboard
 

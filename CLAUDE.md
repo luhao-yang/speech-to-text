@@ -69,6 +69,20 @@ type defaults to `float16` on GPU and `int8` on CPU.
   `model.transcribe(..., word_timestamps=True, vad_filter=True)`, trims committed audio
 - `pcm16_to_float32` — converts incoming int16 PCM bytes to the float32 array Whisper wants
 
+## Native dictation client
+
+`dictate_client.py` is a standalone push-to-talk client (not part of the Flask
+process). It reuses the `/ws/stream` WebSocket: hold a hotkey (F9), it captures
+the mic via `sounddevice`, streams int16/16 kHz PCM to the server, waits for the
+`done: true` frame, and types the committed text at the cursor via `pynput`.
+Final-text-only — nothing is injected until you release the key.
+
+Must run with **Windows** Python (global hotkeys + keystroke injection need the
+OS that owns the keyboard); the server can stay in WSL and is reached over
+`localhost`. Launchers: `dictate.bat` (cmd) and `dictate.sh` (Git Bash). Client
+deps live in `requirements-client.txt` (`sounddevice`, `websocket-client`,
+`pynput`), separate from the server's `requirements.txt`.
+
 ## Dependencies
 
 Install into the `.venv` virtual environment:
