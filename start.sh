@@ -29,7 +29,7 @@ check_dependencies() {
 
     # Python packages (quick import check)
     if [[ -f "$VENV/bin/python" ]]; then
-        local packages=("flask" "whisper" "torch" "deep_translator")
+        local packages=("flask" "flask_sock" "faster_whisper" "torch" "deep_translator")
         for pkg in "${packages[@]}"; do
             if ! "$VENV/bin/python" -c "import $pkg" &>/dev/null; then
                 echo "[MISSING] Python package '$pkg' — run: pip install -r requirements.txt"

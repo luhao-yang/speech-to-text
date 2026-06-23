@@ -191,6 +191,34 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    /* ─── Mode toggle ───────────────────────────────────────────────────── */
+    .mode-toggle {
+      display: inline-flex;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: .6rem;
+      padding: .2rem;
+      margin-bottom: 1rem;
+      gap: .2rem;
+    }
+    .mode-toggle button {
+      background: transparent;
+      border: none;
+      color: #94a3b8;
+      padding: .4rem .9rem;
+      font-size: .85rem;
+      font-weight: 600;
+      border-radius: .45rem;
+      cursor: pointer;
+      transition: background .2s, color .2s;
+    }
+    .mode-toggle button.active { background: #3b82f6; color: #fff; }
+
+    /* Live partial (uncommitted) transcript tail */
+    .partial { color: #64748b; }
+    .cursor-blink { animation: blink 1s step-start infinite; color: #38bdf8; }
+    @keyframes blink { 50% { opacity: 0; } }
+
     .hidden { display: none !important; }
   </style>
 </head>
@@ -198,6 +226,12 @@
 
 <div class="card">
   <h1>🎙️ Speech to Text</h1>
+
+  <!-- Mode toggle -->
+  <div class="mode-toggle" role="tablist" aria-label="Transcription mode">
+    <button id="mode-live" class="active" role="tab" aria-selected="true">⚡ Live dictation</button>
+    <button id="mode-batch" role="tab" aria-selected="false">📁 Record &amp; upload</button>
+  </div>
 
   <!-- Meta info row -->
   <div class="meta-row">
@@ -254,6 +288,15 @@
 let mediaRecorder = null;
 let audioChunks   = [];
 let isRecording   = false;
+let mode          = 'live';          // 'live' | 'batch'
+
+// Live-streaming state
+let ws            = null;
+let audioContext  = null;
+let mediaStream   = null;
+let workletNode   = null;
+let committedText = '';
+let partialText   = '';
 
 // ─── DOM refs ────────────────────────────────────────────────────────────────
 const recordBtn     = document.getElementById('record-btn');
@@ -269,15 +312,162 @@ const translateBtn  = document.getElementById('translate-btn');
 const translatedBox = document.getElementById('translated-box');
 const spinnerTr     = document.getElementById('spinner-tr');
 const dictationLang = document.getElementById('dictation-lang');
+const modeLiveBtn   = document.getElementById('mode-live');
+const modeBatchBtn  = document.getElementById('mode-batch');
+
+// ─── Mode toggle ──────────────────────────────────────────────────────────────
+function setMode(next) {
+  if (isRecording || next === mode) return;
+  mode = next;
+  modeLiveBtn.classList.toggle('active', mode === 'live');
+  modeBatchBtn.classList.toggle('active', mode === 'batch');
+  modeLiveBtn.setAttribute('aria-selected', mode === 'live');
+  modeBatchBtn.setAttribute('aria-selected', mode === 'batch');
+  setStatus(mode === 'live' ? 'Live mode — transcribes as you speak.'
+                            : 'Batch mode — records, then transcribes on stop.');
+}
+modeLiveBtn.addEventListener('click', () => setMode('live'));
+modeBatchBtn.addEventListener('click', () => setMode('batch'));
 
 // ─── Recording ───────────────────────────────────────────────────────────────
 recordBtn.addEventListener('click', async () => {
   if (!isRecording) {
-    await startRecording();
+    if (mode === 'live') await startLive();
+    else                 await startRecording();
   } else {
-    stopRecording();
+    if (mode === 'live') stopLive();
+    else                 stopRecording();
   }
 });
+
+// ─── Live streaming (WebSocket + AudioWorklet) ────────────────────────────────
+const WORKLET_SRC = `
+class PCMProcessor extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = []; this.target = 2048; }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (ch) {
+      for (let i = 0; i < ch.length; i++) this.buf.push(ch[i]);
+      while (this.buf.length >= this.target) {
+        const slice = this.buf.splice(0, this.target);
+        const pcm = new Int16Array(slice.length);
+        for (let i = 0; i < slice.length; i++) {
+          let s = Math.max(-1, Math.min(1, slice[i]));
+          pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+        }
+        this.port.postMessage(pcm.buffer, [pcm.buffer]);
+      }
+    }
+    return true;
+  }
+}
+registerProcessor('pcm-worklet', PCMProcessor);
+`;
+
+async function startLive() {
+  try {
+    committedText = '';
+    partialText = '';
+    transcriptBox.dataset.text = '';
+    transcriptBox.classList.remove('placeholder');
+    renderLive();
+    translateBtn.disabled = true;
+    langBadge.textContent = dictationLang.value === 'auto' ? 'detecting…' : dictationLang.value;
+    elapsedBadge.textContent = 'live';
+
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+    // 16 kHz context → browser resamples the mic for us (Whisper wants 16 kHz).
+    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    const blobUrl = URL.createObjectURL(new Blob([WORKLET_SRC], { type: 'application/javascript' }));
+    await audioContext.audioWorklet.addModule(blobUrl);
+    URL.revokeObjectURL(blobUrl);
+
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}/ws/stream`);
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ language: dictationLang.value }));
+      const source = audioContext.createMediaStreamSource(mediaStream);
+      workletNode = new AudioWorkletNode(audioContext, 'pcm-worklet');
+      workletNode.port.onmessage = e => {
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(e.data);
+      };
+      source.connect(workletNode);
+      // Drive the graph without echoing audio to the speakers.
+      const sink = audioContext.createGain();
+      sink.gain.value = 0;
+      workletNode.connect(sink).connect(audioContext.destination);
+    };
+
+    ws.onmessage = ev => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'partial') {
+        partialText = msg.text || '';
+      } else if (msg.type === 'final') {
+        committedText = msg.committed || committedText;
+        if (msg.done) partialText = '';
+      } else if (msg.type === 'error') {
+        setStatus('Stream error: ' + msg.message, true);
+      }
+      renderLive();
+      transcriptBox.dataset.text = committedText;
+      translateBtn.disabled = !committedText;
+    };
+
+    ws.onerror = () => setStatus('WebSocket error.', true);
+    ws.onclose = () => { if (isRecording) stopLive(); };
+
+    isRecording = true;
+    recordBtn.classList.add('recording');
+    btnLabel.textContent = 'Stop';
+    setStatus('Listening…');
+  } catch (err) {
+    setStatus('Could not start live mode: ' + err.message, true);
+    teardownLive();
+  }
+}
+
+function stopLive() {
+  isRecording = false;
+  recordBtn.classList.remove('recording');
+  btnLabel.textContent = 'Start Recording';
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ action: 'stop' }));
+  }
+  partialText = '';
+  renderLive();
+  elapsedBadge.textContent = '—';
+  setStatus('Stopped.');
+  // Give the server a moment to flush the final frame, then close.
+  setTimeout(teardownLive, 1500);
+}
+
+function teardownLive() {
+  if (workletNode) { try { workletNode.disconnect(); } catch (e) {} workletNode = null; }
+  if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+  if (audioContext) { audioContext.close().catch(() => {}); audioContext = null; }
+  if (ws) { try { ws.close(); } catch (e) {} ws = null; }
+}
+
+function renderLive() {
+  transcriptBox.classList.toggle('placeholder', !committedText && !partialText);
+  if (!committedText && !partialText) {
+    transcriptBox.textContent = 'Press "Start Recording" and speak…';
+  } else {
+    const sep = committedText && partialText ? ' ' : '';
+    transcriptBox.innerHTML =
+      escapeHtml(committedText) +
+      (partialText ? `<span class="partial">${sep}${escapeHtml(partialText)}</span>` : '') +
+      (isRecording ? '<span class="cursor-blink"> ▋</span>' : '');
+  }
+  transcriptBox.appendChild(copyBtn);
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
 
 async function startRecording() {
   try {
@@ -409,6 +599,9 @@ function setStatus(msg, isError = false) {
   statusMsg.textContent = msg;
   statusMsg.style.color = isError ? '#f87171' : '#94a3b8';
 }
+
+// Initial hint
+setStatus('Live mode — transcribes as you speak.');
 </script>
 </body>
 </html>

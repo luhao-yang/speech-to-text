@@ -1,7 +1,7 @@
 # Speech-to-Text
 
-A local, self-hosted speech-to-text web application powered by [OpenAI Whisper](https://github.com/openai/whisper) and [Flask](https://flask.palletsprojects.com/).  
-Record audio directly in your browser, transcribe it with Whisper, see the detected language and elapsed time, and optionally translate the result into 20+ languages — all running entirely on your own machine.
+A local, self-hosted speech-to-text web application powered by [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (a fast CTranslate2 reimplementation of OpenAI Whisper) and [Flask](https://flask.palletsprojects.com/).  
+Dictate in **real time** and watch the transcript appear as you speak, or record/upload a clip for batch transcription. See the detected language, copy the result, and optionally translate it into 20+ languages — all running entirely on your own machine.
 
 ---
 
@@ -23,52 +23,57 @@ Record audio directly in your browser, transcribe it with Whisper, see the detec
 
 ## How It Works
 
+There are two transcription modes:
+
+**⚡ Live dictation (default)** — low-latency streaming over a WebSocket:
+
 ```
-Browser (microphone)
-      │
-      │  1. User clicks "Start Recording"
-      │     MediaRecorder captures audio as WebM/Opus blob
-      │
+Browser (microphone)                          Flask server (app.py)
+      │                                              │
+      │  16 kHz AudioContext + AudioWorklet          │
+      │  emit raw int16 PCM frames                   │
+      │ ───────────  ws://…/ws/stream  ───────────►  │
+      │                                     OnlineTranscriber (streaming.py)
+      │                                     re-transcribes a growing buffer,
+      │                                     commits agreed words (LocalAgreement-2)
+      │  ◄──── {"type":"partial", …} live preview ──┤
+      │  ◄──── {"type":"final",   …} committed text ┤
       ▼
-Flask server  (app.py)
-      │
-      │  2. POST /transcribe
-      │     Audio blob saved to a temporary file
-      │     OpenAI Whisper loads the file and runs the STT model
-      │     Detected language + transcript + elapsed time returned as JSON
-      │
-      │  3. (Optional) POST /translate
-      │     Transcript text sent to Google Translate via deep-translator
-      │     Translated text returned as JSON
-      │
-      ▼
-Browser UI
-      │
-      └─ Displays transcript, detected language, elapsed time
-         Copy-to-clipboard button
-         Translated text (if requested)
+   Committed text + greyed live tail, updating as you speak
 ```
+
+**📁 Record & upload (batch)** — record a whole clip, then transcribe:
+
+```
+Browser  ──MediaRecorder (WebM/Opus)──►  POST /transcribe  ──►  {text, language, elapsed}
+                                          (temp file → faster-whisper → delete)
+```
+
+Either way, the transcript can optionally be sent to `POST /translate` (Google
+Translate via deep-translator, needs internet) and translated into 20+ languages.
 
 ### Component breakdown
 
 | Component | Role |
 |-----------|------|
-| **Flask** (`app.py`) | Python web framework; serves the UI and exposes REST endpoints |
-| **OpenAI Whisper** | Local, offline speech recognition model; supports 99+ languages |
-| **PyTorch** | Deep-learning runtime used by Whisper; uses CUDA GPU when available |
+| **Flask + flask-sock** (`app.py`) | Web framework; serves the UI, REST endpoints, and the `/ws/stream` WebSocket |
+| **faster-whisper** | Local, offline speech recognition (CTranslate2); ~4× faster than `openai-whisper`, supports 99+ languages |
+| **streaming.py** | `OnlineTranscriber` + LocalAgreement-2 logic that turns Whisper into a low-latency streaming transcriber |
+| **PyTorch** | Provides CUDA device detection; faster-whisper runs on GPU when available |
 | **deep-translator** | Thin wrapper around Google Translate; used for the optional translation step |
-| **MediaRecorder API** | Browser API that captures microphone audio; no plugins needed |
+| **MediaRecorder / AudioWorklet** | Browser APIs that capture microphone audio; no plugins needed |
 
 ---
 
 ## Features
 
-- 🎙️ **Browser recording** – click once to record, click again to stop; no extra software needed
-- 🔤 **Whisper transcription** – `turbo` model by default; all processing is local and offline
+- ⚡ **Live dictation** – streaming transcription that appears as you speak (~1 s latency), with stable committed text and a live preview tail
+- 🎙️ **Batch mode** – record (or upload) a whole clip and transcribe it in one shot
+- 🔤 **faster-whisper** – `turbo` model by default; ~4× faster and lower VRAM than `openai-whisper`; all processing is local and offline
 - 🌐 **Automatic language detection** – Whisper identifies the spoken language automatically
-- ⏱️ **Elapsed time** – shows how long the transcription job took in seconds
 - 📋 **Copy button** – one-click copy of the transcript to the clipboard
 - 🔄 **Translation** – translate the transcript to 20+ languages (requires internet for Google Translate)
+- 🩺 **Health check** – `GET /health` for liveness probes
 - ⚡ **CUDA support** – automatically uses an NVIDIA GPU when available; falls back to CPU seamlessly
 
 ---
@@ -81,15 +86,22 @@ speech-to-text/
 ├── app.py                  # Flask application entry point
 │   ├── DEVICE              # Auto-detects CUDA or CPU
 │   ├── MODEL_NAME          # Whisper model to load (env-configurable)
+│   ├── COMPUTE_TYPE        # float16 (GPU) / int8 (CPU), env-configurable
 │   ├── TRANSLATION_TARGETS # Dict of supported translation languages
 │   ├── GET  /              # Serves index.html
-│   ├── POST /transcribe    # Accepts audio, returns transcript JSON
-│   └── POST /translate     # Accepts text + target lang, returns translation JSON
+│   ├── GET  /health        # Liveness probe (model + device)
+│   ├── POST /transcribe    # Accepts audio, returns transcript JSON (batch)
+│   ├── POST /translate     # Accepts text + target lang, returns translation JSON
+│   └── WS   /ws/stream     # Live streaming transcription (partial/final frames)
+│
+├── streaming.py            # Streaming transcription engine
+│   ├── HypothesisBuffer    # LocalAgreement-2 word-commit logic
+│   └── OnlineTranscriber   # Per-connection buffer + faster-whisper driver
 │
 ├── templates/
 │   └── index.html          # Single-page UI (HTML + CSS + vanilla JS)
-│       ├── Recording controls   (Start / Stop button)
-│       ├── Transcript area      (result + copy button)
+│       ├── Mode toggle          (Live dictation / Record & upload)
+│       ├── Transcript area      (committed text + live preview + copy button)
 │       ├── Meta badges          (detected language, elapsed time)
 │       └── Translation section  (language dropdown + output area)
 │
@@ -164,12 +176,13 @@ This installs:
 
 | Package | Version | Purpose |
 |---------|---------|---------|
-| `flask` | ≥ 3.0 | Web framework / HTTP server |
-| `openai-whisper` | ≥ 20231117 | Speech-to-text model |
-| `deep-translator` | ≥ 1.11.4 | Translation via Google Translate |
-| `torch` | ≥ 2.0 | PyTorch (Whisper's ML runtime) |
-| `numpy` | ≥ 1.24 | Numerical arrays (Whisper dependency) |
-| `werkzeug` | ≥ 3.0 | WSGI utilities (Flask dependency) |
+| `flask` | 3.1.3 | Web framework / HTTP server |
+| `flask-sock` | 0.7.0 | WebSocket support for the live streaming endpoint |
+| `faster-whisper` | 1.2.1 | Speech-to-text model (CTranslate2) |
+| `deep-translator` | 1.11.4 | Translation via Google Translate |
+| `torch` | ≥ 2.0 | PyTorch (CUDA device detection) |
+| `numpy` | 2.4.3 | Numerical arrays |
+| `werkzeug` | 3.1.6 | WSGI utilities (Flask dependency) |
 
 ### Step 5 — (GPU only) Install CUDA-enabled PyTorch
 
@@ -214,12 +227,12 @@ python app.py
 Expected output:
 
 ```
-INFO:__main__:Loading Whisper model 'turbo' on device 'cuda' …
-INFO:__main__:Whisper model loaded.
+INFO:app:Loading Whisper model 'turbo' on device 'cuda' (compute_type=float16) …
+INFO:app:Whisper model loaded.
  * Running on http://0.0.0.0:5000
 ```
 
-> **First run only:** Whisper will automatically download the `turbo` model weights (~1.5 GB) from the internet and cache them in `~/.cache/whisper/`. Subsequent starts are instant.
+> **First run only:** faster-whisper will automatically download the `turbo` model weights (~1.5 GB) from Hugging Face and cache them in `~/.cache/huggingface/`. Subsequent starts are instant.
 
 Open your browser and navigate to:
 
@@ -235,13 +248,20 @@ To stop the server: press `Ctrl+C`
 
 ## Using the App
 
-### Transcription
+### Live dictation (default)
 
 1. Open **http://localhost:5000** in your browser.
-2. Click **Start Recording** — the button turns red and pulses to show it is listening.
-3. Speak clearly into your microphone.
-4. Click **Stop Recording** — the audio is automatically sent to the server for transcription.
-5. While processing, a spinner appears. Once complete:
+2. Make sure **⚡ Live dictation** is selected in the mode toggle.
+3. Click **Start Recording** and speak.
+4. The transcript streams in as you talk: committed words appear in white, the
+   live (still-changing) preview appears greyed at the end.
+5. Click **Stop** to finish — the final words are flushed and committed.
+
+### Record & upload (batch)
+
+1. Select **📁 Record & upload** in the mode toggle.
+2. Click **Start Recording**, speak, then **Stop Recording**.
+3. The whole clip is sent to the server; a spinner shows while it transcribes. Once complete:
    - The **transcript** appears in the text area.
    - The **detected language** badge updates (e.g. `en`, `zh`, `fr`).
    - The **elapsed time** badge shows how many seconds the transcription took.
@@ -268,6 +288,8 @@ The app is configured via environment variables set before running `python app.p
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `WHISPER_MODEL` | `turbo` | Whisper model to load. See [model comparison](#whisper-model-comparison) below. |
+| `WHISPER_COMPUTE_TYPE` | `float16` (GPU) / `int8` (CPU) | CTranslate2 precision. Options include `float16`, `int8_float16`, `int8`. Lower precision = faster / less VRAM, slightly less accurate. |
+| `STT_VERBOSE` | `1` (on) | INFO-level logging, including the dev server's per-request access logs. Set to `0` to quiet logs down to WARNING. |
 
 ### Examples
 
@@ -283,11 +305,11 @@ WHISPER_MODEL=tiny python app.py
 
 ## API Reference
 
-The Flask server exposes two JSON endpoints consumed by the frontend.
+The Flask server exposes the following endpoints consumed by the frontend.
 
 ### `POST /transcribe`
 
-Accepts an audio file, runs Whisper, and returns the transcript.
+Accepts an audio file, runs Whisper, and returns the transcript (batch mode).
 
 **Request** — `multipart/form-data`
 
@@ -360,6 +382,44 @@ Translates a text string into the requested language.
 
 ---
 
+### `WS /ws/stream`
+
+Live streaming transcription over a WebSocket. Used by the **Live dictation** mode.
+
+**Client → server**
+
+1. (Optional) one text frame selecting the language: `{"language": "en"}` — omit or
+   use `"auto"` to let Whisper detect it.
+2. Binary frames of raw **little-endian int16 PCM, mono, 16 kHz**.
+3. A text frame `{"action": "stop"}` to flush the remaining audio as final.
+
+**Server → client** — JSON text frames:
+
+```json
+{ "type": "partial", "text": "live preview that may still change" }
+{ "type": "final",   "text": "newly committed words", "committed": "full text so far" }
+{ "type": "final",   "text": "…", "committed": "…", "done": true }
+{ "type": "error",   "message": "…" }
+```
+
+`partial` frames are a live preview that may be rewritten; `final` frames are
+committed (stable) via the LocalAgreement-2 policy. The frame with `"done": true`
+marks the end of the stream.
+
+---
+
+### `GET /health`
+
+Liveness probe.
+
+**Response** — `application/json`
+
+```json
+{ "status": "ok", "model": "turbo", "device": "cuda" }
+```
+
+---
+
 ## Whisper Model Comparison
 
 Choose a model based on your hardware and accuracy requirements.
@@ -398,11 +458,16 @@ sudo apt install -y ffmpeg
 - The Whisper model is loaded into memory at server start, but the first inference warms up CUDA kernels. Subsequent requests will be faster.
 
 ### `OSError: [Errno 28] No space left on device`
-- The Whisper model cache lives in `~/.cache/whisper/`. Free up disk space or point the cache elsewhere:
+- The model cache lives in `~/.cache/huggingface/`. Free up disk space or point the cache elsewhere:
   ```bash
-  export XDG_CACHE_HOME=/path/to/large/disk
+  export HF_HOME=/path/to/large/disk
   python app.py
   ```
+
+### Live dictation shows no text
+- Live mode needs microphone access on a `localhost` or HTTPS origin (see the microphone note above).
+- Check the browser console for WebSocket errors and the server log for `Streaming error`.
+- The first streaming pass warms up CUDA kernels and can lag a second or two; it settles quickly.
 
 ### Port 5000 already in use
 ```bash
